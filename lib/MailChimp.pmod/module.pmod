@@ -6,9 +6,10 @@
 # define mc_debug(a ...)
 #endif
 
-typedef function(int(0..1),mapping,mixed...:void) call_cb;
+typedef function(int(0..1),mapping|object(Error),mixed...:void) call_cb;
+typedef function(int(0..1),array(mapping)|object(Error),mixed...:void) export_cb;
 
-void headers_ok() {}
+private void headers_ok() {}
 
 class Error(mapping info) {
     string _sprintf(int type) {
@@ -16,7 +17,15 @@ class Error(mapping info) {
     }
 }
 
-void data_ok(object request, call_cb cb, array extra) {
+class Timeout {
+    inherit Error;
+
+    void create() {
+        ::create(([]));
+    }
+}
+
+private void data_ok(object request, call_cb cb, array extra) {
     string s = request->data();
     mapping ret;
     
@@ -35,14 +44,36 @@ void data_ok(object request, call_cb cb, array extra) {
     cb(1, ret, @extra);
 }
 
-void fail(object request, call_cb cb, array extra) {
-    cb(0, 0, @extra);
+private void export_data_ok(object request, export_cb cb, array extra) {
+    string s = request->data();
+    array ret = ({ });
+    
+    // TODO: check return code
+
+    mixed err = catch {
+        foreach (s/"\n";; string line) if (sizeof(line)) {
+            ret += ({
+                Standards.JSON.decode(line)
+            });
+        }
+    };
+
+    if (err) {
+        cb(0, Error(([ "error" : err ])));
+        return;
+    }
+
+    cb(1, ret, @extra);
+}
+
+private void fail(object request, export_cb|call_cb cb, array extra) {
+    cb(0, Timeout(), @extra);
 }
 
 
 class Session {
     Protocols.HTTP.Session http = Protocols.HTTP.Session();
-    Standards.URI url;
+    Standards.URI url, export_url;
 
     string apikey;
 
@@ -52,6 +83,7 @@ class Session {
         string dc = (apikey/"-")[-1];
 
         url = Standards.URI("https://"+dc+".api.mailchimp.com/2.0/");
+        export_url = Standards.URI("https://"+dc+".api.mailchimp.com/export/1.0/");
     }
 
     void call(string s, mapping data, call_cb cb, mixed ... extra) {
@@ -64,6 +96,14 @@ class Session {
                              headers_ok, data_ok, fail, cb, extra);
     }
 
+    void export(string s, mapping data, call_cb cb, mixed ... extra) {
+        data += ([ "apikey" : apikey ]);
+
+        mc_debug("export: %O %O\n", s, data);
+
+        http->async_get_url(Standards.URI(s, export_url), data,
+                            headers_ok, export_data_ok, fail, cb, extra);
+    }
 
     void lists(void|mapping data, function(array(List),mixed...:void) cb, mixed ... extra) {
         call("lists/list", data||([]), list_cb, this, cb, extra);
@@ -101,6 +141,15 @@ class List {
 
     void call(string s, mapping data, call_cb cb, mixed ... extra) {
         session->call("lists/"+s, data + ([ "id" : id ]), cb, @extra);
+    }
+    
+    void export(mapping data, export_cb cb, mixed ... extra) {
+        data += ([ "id" : id ]);
+
+        if (objectp(data->since)) {
+            data->since = data->since->set_timezone("UTC")->format_time();
+        }
+        session->export("list", data, cb, @extra);
     }
 
     void static_segments(void|mapping data, function(array(StaticSegment),mixed...:void) cb, mixed ... extra) {
