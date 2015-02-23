@@ -1,17 +1,33 @@
+#define MAILCHIMP_DEBUG
+
+#ifdef MAILCHIMP_DEBUG
+# define mc_debug(a ...)        werror(a)
+#else
+# define mc_debug(a ...)
+#endif
+
 typedef function(int(0..1),mapping,mixed...:void) call_cb;
 
 void headers_ok() {}
 
+class Error(mapping info) {
+    string _sprintf(int type) {
+        return sprintf("%O(%O)", this_program, info);
+    }
+}
+
 void data_ok(object request, call_cb cb, array extra) {
     string s = request->data();
     mapping ret;
+    
+    // TODO: check return code
 
     if (catch (ret = Standards.JSON.decode(s))) {
         cb(0, 0, @extra);
         return;
     }
 
-    if (!mappingp(ret) || ret->status == "error") {
+    if (mappingp(ret) && ret->status == "error") {
         cb(0, ret, @extra);
         return;
     }
@@ -41,7 +57,7 @@ class Session {
     void call(string s, mapping data, call_cb cb, mixed ... extra) {
         data += ([ "apikey" : apikey ]);
 
-        werror("api: %O\n", s);
+        mc_debug("api: %O\n", s);
 
         http->async_post_url(Standards.URI(s+".json", url),
                              string_to_utf8(Standards.JSON.encode(data)),
@@ -63,13 +79,13 @@ private void list_cb(int(0..1) success, mapping data, object(Session) session, f
     cb(map(data->data, Function.curry(List)(session)), @extra);
 }
 
-private void segment_cb(int(0..1) success, mapping data, object(List) list, function(array(StaticSegment), mixed...:void) cb, array extra) {
-    if (!success || !arrayp(data->data)) {
+private void segment_cb(int(0..1) success, mixed data, object(List) list, function(array(StaticSegment), mixed...:void) cb, array extra) {
+    if (!success || !arrayp(data)) {
         cb(0);
         return;
     }
 
-    cb(map(data->data, Function.curry(StaticSegment)(list)), @extra);
+    cb(map(data, Function.curry(StaticSegment)(list)), @extra);
 }
 
 class List {
@@ -90,10 +106,52 @@ class List {
     void static_segments(void|mapping data, function(array(StaticSegment),mixed...:void) cb, mixed ... extra) {
         call("static-segments", data||([]), segment_cb, this, cb, extra);
     }
+
+    void static_segment_add(string name, function(object(StaticSegment),mixed...:void) cb, mixed ... extra) {
+        call("static-segment-add", ([ "name" : name ]), lambda(int(0..1) success, mapping data) {
+             if (success) {
+                cb(StaticSegment(this, data), @extra);
+                return;
+             }
+             cb(0, @extra);
+        });
+    }
+
+    string _sprintf(int type) {
+        return sprintf("%O(%s)", this_program, id);
+    }
+
+    void subscribe(string|mapping email, function(object(Subscriber)|int,void|object(Error):void) cb, mixed ... extra) {
+        mapping data = ([
+            "double_optin" : Val.false,
+        ]);
+
+        if (mappingp(email)) data += email;
+        else data->email = ([ "email" : email ]);
+
+        call("subscribe", data, lambda(int(0..1) success, mapping data) {
+             if (!success || !mappingp(data) || !data->email || !data->euid || !data->leid) {
+                cb(0, Error(data));
+                return;
+             }
+
+             cb(Subscriber(this, data));
+        });
+    }
+}
+
+class Subscriber {
+    List list;
+    mapping info;
+
+    void create(List list, mapping info) {
+        this_program::list = list;
+        this_program::info = info;
+    }
 }
 
 class StaticSegment {
-    string id;
+    int id;
     mapping info;
     List list;
 
@@ -105,5 +163,41 @@ class StaticSegment {
 
     void call(string s, mapping data, call_cb cb, mixed ... extra) {
         list->call("static-segment-"+s, data + ([ "seg_id" : id ]), cb, @extra);
+    }
+
+    string _sprintf(int type) {
+        return sprintf("%O(%d)", this_program, id);
+    }
+
+    void delete(call_cb cb, mixed ... extra) {
+        call("del", ([]), cb, @extra);
+    }
+
+    void add_members(mixed|array members, call_cb cb, mixed ... extra) {
+        if (!arrayp(members)) members = ({ members });
+        foreach (members; int n; mixed v) {
+            if (stringp(v)) {
+                // we assume its an email
+                members[n] = ([ "email" : v ]);
+            }
+        }
+
+        call("members-add", ([ "batch" : members ]), cb, @extra);
+    }
+
+    void delete_members(mixed|array members, call_cb cb, mixed ... extra) {
+        if (!arrayp(members)) members = ({ members });
+        foreach (members; int n; mixed v) {
+            if (stringp(v)) {
+                // we assume its an email
+                members[n] = ([ "email" : v ]);
+            }
+        }
+
+        call("members-del", ([ "batch" : members ]), cb, @extra);
+    }
+
+    void reset(call_cb cb, mixed ... extra) {
+        call("reset", ([ ]), cb, @extra);
     }
 }
