@@ -110,7 +110,8 @@ class Session {
     }
 }
 
-private void list_cb(int(0..1) success, mapping data, object(Session) session, function(array(List),mixed...:void) cb, array extra) {
+private void list_cb(int(0..1) success, mapping data, object(Session) session,
+                     function(array(List),mixed...:void) cb, array extra) {
     if (!success || !arrayp(data->data)) {
         cb(0);
         return;
@@ -142,6 +143,14 @@ class List {
     void call(string s, mapping data, call_cb cb, mixed ... extra) {
         session->call("lists/"+s, data + ([ "id" : id ]), cb, @extra);
     }
+
+    private void export_callback(int(0..1) success, array(mapping)|object data, export_cb cb, array extra) {
+        if (success) {
+            cb(success, map(data[1..], Function.curry(mkmapping)(data[0])), @extra); 
+        } else {
+            cb(success, data, @extra);
+        }
+    }
     
     void export(mapping data, export_cb cb, mixed ... extra) {
         data += ([ "id" : id ]);
@@ -149,7 +158,7 @@ class List {
         if (objectp(data->since)) {
             data->since = data->since->set_timezone("UTC")->format_time();
         }
-        session->export("list", data, cb, @extra);
+        session->export("list", data, export_callback, cb, extra);
     }
 
     void static_segments(void|mapping data, function(array(StaticSegment),mixed...:void) cb, mixed ... extra) {
@@ -170,7 +179,46 @@ class List {
         return sprintf("%O(%s)", this_program, id);
     }
 
-    void subscribe(string|mapping email, function(object(Subscriber)|int,void|object(Error):void) cb, mixed ... extra) {
+    typedef subscribe_cb|function(array(object(Subscriber))|int(0..1),object(Error)|array(object(Error)),mixed...:void) member_info_cb;
+
+    void member_info(string|mapping|array email, member_info_cb cb, mixed ... extra) {
+        mapping data = ([]);
+        int array_return = 0;
+        if (stringp(email)) data->emails = ({ ([ "email" : email ]) });
+        else if (mappingp(email)) data->emails = ({ email });
+        else if (arrayp(email)) {
+            array_return = 1;
+            foreach (email; int i; string|mapping e) {
+                if (stringp(e)) {
+                    email[i]  = ([ "email" : e ]);
+                }
+            }
+            data->emails = email;
+        }
+
+        call("member-info", data, lambda(int(0..1) success, object(Error)|mapping data) {
+             if (!success || !mappingp(data) || !arrayp(data->data)) {
+                cb(0, mappingp(data) ? Error(data) : data, @extra);
+                return;
+             }
+
+             if (array_return) {
+                cb(map(data->data, Function.curry(Subscriber)(this)),
+                   map(data->errors, Error), @extra);
+             } else {
+                if (data->success_count) {
+                    cb(1, Subscriber(this, data->data[0]), @extra);
+                }
+             }
+
+             cb(1, Subscriber(this, data), @extra);
+        });
+    }
+
+    typedef function(int(0..1),object(Subscriber)|object(Error),mixed...:void) subscribe_cb;
+
+    void subscribe(string|mapping email, subscribe_cb cb,
+                   mixed ... extra) {
         mapping data = ([
             "double_optin" : Val.false,
         ]);
@@ -178,13 +226,13 @@ class List {
         if (mappingp(email)) data += email;
         else data->email = ([ "email" : email ]);
 
-        call("subscribe", data, lambda(int(0..1) success, mapping data) {
+        call("subscribe", data, lambda(int(0..1) success, object(Error)|mapping data) {
              if (!success || !mappingp(data) || !data->email || !data->euid || !data->leid) {
-                cb(0, Error(data));
+                cb(0, mappingp(data) ? Error(data) : data, @extra);
                 return;
              }
 
-             cb(Subscriber(this, data));
+             cb(1, Subscriber(this, data), @extra);
         });
     }
 }
