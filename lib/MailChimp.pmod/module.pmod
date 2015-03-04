@@ -25,53 +25,53 @@ class Timeout {
     }
 }
 
-private void data_ok(object request, call_cb cb, array extra) {
-    string s = request->data();
-    mapping ret;
-    
-    // TODO: check return code
-
-    if (catch (ret = Standards.JSON.decode(s))) {
-        cb(0, 0, @extra);
-        return;
-    }
-
-    if (mappingp(ret) && ret->status == "error") {
-        cb(0, ret, @extra);
-        return;
-    }
-
-    cb(1, ret, @extra);
-}
-
-private void export_data_ok(object request, export_cb cb, array extra) {
-    string s = request->data();
-    array ret = ({ });
-    
-    // TODO: check return code
-
-    mixed err = catch {
-        foreach (s/"\n";; string line) if (sizeof(line)) {
-            ret += ({
-                Standards.JSON.decode(line)
-            });
-        }
-    };
-
-    if (err) {
-        cb(0, Error(([ "error" : err ])));
-        return;
-    }
-
-    cb(1, ret, @extra);
-}
-
-private void fail(object request, export_cb|call_cb cb, array extra) {
-    cb(0, Timeout(), @extra);
-}
-
 
 class Session {
+    private void data_ok(object request, call_cb cb, array extra) {
+        string s = request->data();
+        mapping ret;
+        
+        // TODO: check return code
+
+        if (catch (ret = Standards.JSON.decode(s))) {
+            cb(0, 0, @extra);
+            return;
+        }
+
+        if (mappingp(ret) && ret->status == "error") {
+            cb(0, ret, @extra);
+            return;
+        }
+
+        cb(1, ret, @extra);
+    }
+
+    private void export_data_ok(object request, export_cb cb, array extra) {
+        string s = request->data();
+        array ret = ({ });
+        
+        // TODO: check return code
+
+        mixed err = catch {
+            foreach (s/"\n";; string line) if (sizeof(line)) {
+                ret += ({
+                    Standards.JSON.decode(line)
+                });
+            }
+        };
+
+        if (err) {
+            cb(0, Error(([ "error" : err ])));
+            return;
+        }
+
+        cb(1, ret, @extra);
+    }
+
+    private void fail(object request, export_cb|call_cb cb, array extra) {
+        cb(0, Timeout(), @extra);
+    }
+
     Protocols.HTTP.Session http = Protocols.HTTP.Session();
     Standards.URI url, export_url;
 
@@ -137,6 +137,7 @@ class List {
     void create(Session session, mapping info) {
         this_program::session = session;
         this_program::info = info;
+        if (!objectp(session) || !mappingp(info)) error("bad arguments.\n");
         id = info->id;
     }
 
@@ -181,10 +182,15 @@ class List {
 
     typedef subscribe_cb|function(array(object(Subscriber))|int(0..1),object(Error)|array(object(Error)),mixed...:void) member_info_cb;
 
+    mapping get_email_struct(mapping|string data) {
+        if (stringp(data)) data = ([ "email" : data ]);
+        return data;
+    }
+
     void member_info(string|mapping|array email, member_info_cb cb, mixed ... extra) {
         mapping data = ([]);
         int array_return = 0;
-        if (stringp(email)) data->emails = ({ ([ "email" : email ]) });
+        if (stringp(email)) data->emails = ({ get_email_struct(email) });
         else if (mappingp(email)) data->emails = ({ email });
         else if (arrayp(email)) {
             array_return = 1;
@@ -208,10 +214,10 @@ class List {
              } else {
                 if (data->success_count) {
                     cb(1, Subscriber(this, data->data[0]), @extra);
+                } else {
+                    cb(0, Error(data->errors[0]), @extra);
                 }
              }
-
-             cb(1, Subscriber(this, data), @extra);
         });
     }
 
@@ -224,7 +230,7 @@ class List {
         ]);
 
         if (mappingp(email)) data += email;
-        else data->email = ([ "email" : email ]);
+        else data->email = get_email_struct(email);
 
         call("subscribe", data, lambda(int(0..1) success, object(Error)|mapping data) {
              if (!success || !mappingp(data) || !data->email || !data->euid || !data->leid) {
@@ -233,6 +239,23 @@ class List {
              }
 
              cb(1, Subscriber(this, data), @extra);
+        });
+    }
+
+    typedef function(int(0..1),object(Error),mixed...:void) unsubscribe_cb;
+
+    void unsubscribe(string|mapping email, unsubscribe_cb cb, mixed ... extra) {
+        mapping data = ([
+            "send_goodye" : Val.false,
+        ]);
+        if (stringp(email)) data->email = get_email_struct(data);
+        else data += email;
+        call("unsubscribe", data, lambda(int(0..1) success, mapping data) {
+             if (success && data->complete) {
+                cb(1, 0, @extra);
+             } else {
+                cb(0, mappingp(data) ? Error(data) : data, @extra);
+             }
         });
     }
 }
