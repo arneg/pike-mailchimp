@@ -25,6 +25,10 @@ class Timeout {
     }
 }
 
+object(Error) make_error(object(Error)|mapping data) {
+    if (mappingp(data)) data = Error(data);
+    return data;
+}
 
 class Session {
     private void data_ok(object request, call_cb cb, array extra) {
@@ -34,12 +38,13 @@ class Session {
         // TODO: check return code
 
         if (catch (ret = Standards.JSON.decode(s))) {
-            cb(0, 0, @extra);
+            // TODO: test this case for real
+            cb(0, Error(([ "json_error" : ret ])), @extra);
             return;
         }
 
         if (mappingp(ret) && ret->status == "error") {
-            cb(0, ret, @extra);
+            cb(0, Error(ret), @extra);
             return;
         }
 
@@ -78,9 +83,12 @@ class Session {
     string apikey;
 
     void create(string apikey) {
+        array(string) tmp = apikey / "-";
         this_program::apikey = apikey;
 
-        string dc = (apikey/"-")[-1];
+        if (sizeof(tmp) != 2) error("Bad api key!\n");
+
+        string dc = tmp[1];
 
         url = Standards.URI("https://"+dc+".api.mailchimp.com/2.0/");
         export_url = Standards.URI("https://"+dc+".api.mailchimp.com/export/1.0/");
@@ -166,13 +174,13 @@ class List {
         call("static-segments", data||([]), segment_cb, this, cb, extra);
     }
 
-    void static_segment_add(string name, function(object(StaticSegment),mixed...:void) cb, mixed ... extra) {
-        call("static-segment-add", ([ "name" : name ]), lambda(int(0..1) success, mapping data) {
+    void static_segment_add(string name, function(int(0..1),object(StaticSegment),mixed...:void) cb, mixed ... extra) {
+        call("static-segment-add", ([ "name" : name ]), lambda(int(0..1) success, object(Error)|mapping data) {
              if (success) {
-                cb(StaticSegment(this, data), @extra);
+                cb(success, StaticSegment(this, data), @extra);
                 return;
              }
-             cb(0, @extra);
+             cb(success, make_error(data), @extra);
         });
     }
 
@@ -223,7 +231,7 @@ class List {
 
     typedef function(int(0..1),object(Subscriber)|object(Error),mixed...:void) subscribe_cb;
 
-    void subscribe(string|mapping email, subscribe_cb cb,
+    void subscribe(array(string|mapping)|string|mapping email, subscribe_cb cb,
                    mixed ... extra) {
         mapping data = ([
             "double_optin" : Val.false,
@@ -234,7 +242,7 @@ class List {
 
         call("subscribe", data, lambda(int(0..1) success, object(Error)|mapping data) {
              if (!success || !mappingp(data) || !data->email || !data->euid || !data->leid) {
-                cb(0, mappingp(data) ? Error(data) : data, @extra);
+                cb(0, make_error(data), @extra);
                 return;
              }
 
@@ -254,7 +262,7 @@ class List {
              if (success && data->complete) {
                 cb(1, 0, @extra);
              } else {
-                cb(0, mappingp(data) ? Error(data) : data, @extra);
+                cb(0, make_error(data), @extra);
              }
         });
     }
