@@ -11,9 +11,33 @@ typedef function(int(0..1),array(mapping)|object(Error),mixed...:void) export_cb
 
 private void headers_ok() {}
 
+constant permanent_errors = ([
+    "List_DoesNotExist" : 1,
+    "List_InvalidOption" : 1,
+    "Invalid_ApiKey" : 1,
+    "User_InvalidAction" : 1,
+    "User_Disabled" : 1,
+    "ValidationError" : 1,
+]);
+
+constant temporary_errors = ([
+    "Too_Many_Connections" : 1,
+    "User_UnderMaintenance" : 1,
+]);
+
 class Error(mapping info) {
     string _sprintf(int type) {
         return sprintf("%O(%O)", this_program, info);
+    }
+
+    constant is_error = 1;
+
+    int(0..1) `is_permanent() {
+        return has_index(permanent_errors, info->name||info->code);
+    }
+
+    int(0..1) `is_temporary() {
+        return has_index(temporary_errors, info->name||info->code);
     }
 }
 
@@ -21,7 +45,16 @@ class Timeout {
     inherit Error;
 
     void create() {
-        ::create(([]));
+        ::create(([ "name" : "Timeout",
+                    "error" : "Could not connect to MailChimp API." ]));
+    }
+
+    int(0..1) `is_permanent() {
+        return 0;
+    }
+
+    int(0..1) `is_temporary() {
+        return 1;
     }
 }
 
@@ -212,7 +245,7 @@ class List {
 
         call("member-info", data, lambda(int(0..1) success, object(Error)|mapping data) {
              if (!success || !mappingp(data) || !arrayp(data->data)) {
-                cb(0, mappingp(data) ? Error(data) : data, @extra);
+                cb(0, make_error(data), @extra);
                 return;
              }
 
@@ -231,7 +264,7 @@ class List {
 
     typedef function(int(0..1),object(Subscriber)|object(Error),mixed...:void) subscribe_cb;
 
-    void subscribe(array(string|mapping)|string|mapping email, subscribe_cb cb,
+    void subscribe(string|mapping email, subscribe_cb cb,
                    mixed ... extra) {
         mapping data = ([
             "double_optin" : Val.false,
@@ -264,6 +297,61 @@ class List {
              } else {
                 cb(0, make_error(data), @extra);
              }
+        });
+    }
+
+    typedef function(array(object(Subscriber))|int(0..1),
+                     array(object(Error))|object(Error),mixed...:void) batch_subscribe_cb;
+
+    void batch_subscribe(mapping data, array(mapping|string) batch, batch_subscribe_cb cb, mixed ... extra) {
+        data = ([ "double_optin" : Val.false, ]) + data;
+
+        if (!sizeof(batch)) error("Bad argument.\n");
+
+        batch += ({ });
+
+        foreach (batch; int i; mapping|string info) {
+            if (stringp(info)) batch[i] = ([ "email" : get_email_struct(info) ]);
+        }
+
+        data->batch = batch;
+
+        call("batch-subscribe", data, lambda(int(0..1) success, mapping data) {
+            if (!success || !mappingp(data) || (!data->add_count && !data->update_count && !data->error_count)) {
+                cb(0, make_error(data), @extra);
+                return;
+            } else {
+                array(object) subs = map(data->adds + data->updates, Function.curry(Subscriber)(this));
+                array(object) errors = map(data->errors, Error);
+
+                cb(subs, errors, @extra);
+            }
+        });
+    }
+
+    typedef function(int(0..1),array(object(Error))|object(Error):void) batch_unsubscribe_cb;
+
+    void batch_unsubscribe(mapping data, array(mapping|string) batch, batch_unsubscribe_cb cb,
+                           mixed ... extra) {
+        if (!sizeof(batch)) error("Bad argument.\n");
+
+        batch += ({ });
+
+        foreach (batch; int i; mapping|string info) {
+            if (stringp(info)) batch[i] = ([ "email" : get_email_struct(info) ]);
+        }
+
+        data->batch = batch;
+
+        call("batch-unsubscribe", data, lambda(int(0..1) success, mapping data) {
+            if (!success || !mappingp(data) || (!data->success_count && !data->error_count)) {
+                cb(0, make_error(data), @extra);
+                return;
+            } else {
+                array(object) errors = map(data->errors, Error);
+
+                cb(1, errors, @extra);
+            }
         });
     }
 }
