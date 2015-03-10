@@ -86,7 +86,7 @@ private object(Error) make_error(object(Error)|mapping data) {
 }
 
 private mapping get_email_struct(mapping|string data) {
-    if (stringp(data)) data = ([ "email" : data ]);
+    if (!mappingp(data)) data = ([ "email" : data ]);
     return data;
 }
 
@@ -158,7 +158,7 @@ class Session {
     void call(string s, mapping data, call_cb cb, mixed ... extra) {
         data += ([ "apikey" : apikey ]);
 
-        mc_debug("api: %O\n", s);
+        mc_debug("api: %O %O\n", s, data);
 
         http->async_post_url(Standards.URI(s+".json", url),
                              string_to_utf8(Standards.JSON.encode(data)),
