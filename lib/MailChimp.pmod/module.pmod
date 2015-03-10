@@ -23,6 +23,24 @@ constant permanent_errors = ([
 constant temporary_errors = ([
     "Too_Many_Connections" : 1,
     "User_UnderMaintenance" : 1,
+    // we assume this is due to a connection problem or their api
+    // is temporarily broken
+    "invalid_json" : 1,
+    "http_timeout" : 1,
+]);
+
+constant account_errors = ([
+    "Invalid_ApiKey" : 1,
+    "User_InvalidAction" : 1,
+    "User_Disabled" : 1,
+]);
+
+constant list_errors = ([
+    "List_DoesNotExist" : 1,
+    "List_InvalidOption" : 1,
+]);
+
+constant segment_errors = ([
 ]);
 
 class Error(mapping info) {
@@ -39,29 +57,39 @@ class Error(mapping info) {
     int(0..1) `is_temporary() {
         return has_index(temporary_errors, info->name||info->code);
     }
+
+    int(0..1) `is_account_error() {
+        return has_index(account_errors, info->name||info->code);
+    }
+
+    int(0..1) `is_list_error() {
+        return has_index(list_errors, info->name||info->code);
+    }
+
+    int(0..1) `is_segment_error() {
+        return has_index(segment_errors, info->name||info->code);
+    }
 }
 
 class Timeout {
     inherit Error;
 
     void create() {
-        ::create(([ "name" : "Timeout",
+        ::create(([ "name" : "http_timeout",
                     "error" : "Could not connect to MailChimp API." ]));
-    }
-
-    int(0..1) `is_permanent() {
-        return 0;
-    }
-
-    int(0..1) `is_temporary() {
-        return 1;
     }
 }
 
-object(Error) make_error(object(Error)|mapping data) {
+private object(Error) make_error(object(Error)|mapping data) {
     if (mappingp(data)) data = Error(data);
     return data;
 }
+
+private mapping get_email_struct(mapping|string data) {
+    if (stringp(data)) data = ([ "email" : data ]);
+    return data;
+}
+
 
 class Session {
     private void data_ok(object request, call_cb cb, array extra) {
@@ -72,7 +100,7 @@ class Session {
 
         if (catch (ret = Standards.JSON.decode(s))) {
             // TODO: test this case for real
-            cb(0, Error(([ "json_error" : ret ])), @extra);
+            cb(0, Error(([ "name" : "invalid_json", "error" : describe_error(ret) ])), @extra);
             return;
         }
 
@@ -99,7 +127,7 @@ class Session {
         };
 
         if (err) {
-            cb(0, Error(([ "error" : err ])));
+            cb(0, Error(([ "name" : "invalid_json", "error" : describe_error(err) ])), @extra);
             return;
         }
 
@@ -178,7 +206,7 @@ class List {
     void create(Session session, mapping info) {
         this_program::session = session;
         this_program::info = info;
-        if (!objectp(session) || !mappingp(info)) error("bad arguments.\n");
+        if (!objectp(session) || !mappingp(info) || !stringp(info->id)) error("Bad arguments.\n");
         id = info->id;
     }
 
@@ -222,11 +250,6 @@ class List {
     }
 
     typedef subscribe_cb|function(array(object(Subscriber))|int(0..1),object(Error)|array(object(Error)),mixed...:void) member_info_cb;
-
-    mapping get_email_struct(mapping|string data) {
-        if (stringp(data)) data = ([ "email" : data ]);
-        return data;
-    }
 
     void member_info(string|mapping|array email, member_info_cb cb, mixed ... extra) {
         mapping data = ([]);
@@ -329,7 +352,7 @@ class List {
         });
     }
 
-    typedef function(int(0..1),array(object(Error))|object(Error):void) batch_unsubscribe_cb;
+    typedef function(int(0..1),array(object(Error))|object(Error),mixed...:void) batch_unsubscribe_cb;
 
     void batch_unsubscribe(mapping data, array(mapping|string) batch, batch_unsubscribe_cb cb,
                            mixed ... extra) {
@@ -374,6 +397,7 @@ class StaticSegment {
     void create(List list, mapping info) {
         this_program::list = list;
         this_program::info = info;
+        if (!intp(info->id)) error("Bad argument.\n");
         id = info->id;
     }
 
@@ -382,35 +406,49 @@ class StaticSegment {
     }
 
     string _sprintf(int type) {
-        return sprintf("%O(%d)", this_program, id);
+        return sprintf("%O(%O)", this_program, id);
     }
 
     void delete(call_cb cb, mixed ... extra) {
         call("del", ([]), cb, @extra);
     }
 
-    void add_members(mixed|array members, call_cb cb, mixed ... extra) {
+    typedef function(int(0..1),array(Error)|object(Error),mixed...:void) add_members_cb;
+
+    void add_members(mixed|array members, add_members_cb cb, mixed ... extra) {
         if (!arrayp(members)) members = ({ members });
+        if (!sizeof(members)) error("Bad argument.\n");
         foreach (members; int n; mixed v) {
-            if (stringp(v)) {
-                // we assume its an email
-                members[n] = ([ "email" : v ]);
-            }
+            if (stringp(v)) members[n] = get_email_struct(v);
         }
 
-        call("members-add", ([ "batch" : members ]), cb, @extra);
+        call("members-add", ([ "batch" : members ]), lambda(int(0..1) success, mapping|object(Error) ret) {
+            if (!success || (!ret->success_count && !ret->error_count)) {
+                cb(0, ret, @extra);
+                return;
+            }
+
+            cb(1, map(ret->errors, make_error), @extra);
+        });
     }
 
-    void delete_members(mixed|array members, call_cb cb, mixed ... extra) {
+    typedef function(int(0..1),array(Error)|object(Error),mixed...:void) delete_members_cb;
+
+    void delete_members(mixed|array members, delete_members_cb cb, mixed ... extra) {
         if (!arrayp(members)) members = ({ members });
+        if (!sizeof(members)) error("Bad argument.\n");
         foreach (members; int n; mixed v) {
-            if (stringp(v)) {
-                // we assume its an email
-                members[n] = ([ "email" : v ]);
-            }
+            if (stringp(v)) members[n] = get_email_struct(v);
         }
 
-        call("members-del", ([ "batch" : members ]), cb, @extra);
+        call("members-del", ([ "batch" : members ]), lambda(int(0..1) success, object(Error)|mapping ret) {
+            if (!success || (!ret->success_count && !ret->error_count)) {
+                cb(0, ret, @extra);
+                return;
+            }
+
+            cb(1, map(ret->errors, make_error), @extra);
+        });
     }
 
     void reset(call_cb cb, mixed ... extra) {
