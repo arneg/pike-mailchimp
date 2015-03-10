@@ -18,6 +18,7 @@ constant permanent_errors = ([
     "User_InvalidAction" : 1,
     "User_Disabled" : 1,
     "ValidationError" : 1,
+    -99 : 1, // very generic, happens when bad data is passed
 ]);
 
 constant temporary_errors = ([
@@ -254,12 +255,12 @@ class List {
     void member_info(string|mapping|array email, member_info_cb cb, mixed ... extra) {
         mapping data = ([]);
         int array_return = 0;
-        if (stringp(email)) data->emails = ({ get_email_struct(email) });
+        if (!mappingp(email)) data->emails = ({ get_email_struct(email) });
         else if (mappingp(email)) data->emails = ({ email });
         else if (arrayp(email)) {
             array_return = 1;
             foreach (email; int i; string|mapping e) {
-                if (stringp(e)) {
+                if (!mappingp(e)) {
                     email[i]  = ([ "email" : e ]);
                 }
             }
@@ -312,7 +313,7 @@ class List {
         mapping data = ([
             "send_goodye" : Val.false,
         ]);
-        if (stringp(email)) data->email = get_email_struct(data);
+        if (!mappingp(email)) data->email = get_email_struct(data);
         else data += email;
         call("unsubscribe", data, lambda(int(0..1) success, mapping data) {
              if (success && data->complete) {
@@ -334,7 +335,7 @@ class List {
         batch += ({ });
 
         foreach (batch; int i; mapping|string info) {
-            if (stringp(info)) batch[i] = ([ "email" : get_email_struct(info) ]);
+            if (!mappingp(info)) batch[i] = ([ "email" : get_email_struct(info) ]);
         }
 
         data->batch = batch;
@@ -361,7 +362,7 @@ class List {
         batch += ({ });
 
         foreach (batch; int i; mapping|string info) {
-            if (stringp(info)) batch[i] = ([ "email" : get_email_struct(info) ]);
+            if (!mappingp(info)) batch[i] = ([ "email" : get_email_struct(info) ]);
         }
 
         data->batch = batch;
@@ -419,7 +420,7 @@ class StaticSegment {
         if (!arrayp(members)) members = ({ members });
         if (!sizeof(members)) error("Bad argument.\n");
         foreach (members; int n; mixed v) {
-            if (stringp(v)) members[n] = get_email_struct(v);
+            if (!mappingp(v)) members[n] = get_email_struct(v);
         }
 
         call("members-add", ([ "batch" : members ]), lambda(int(0..1) success, mapping|object(Error) ret) {
@@ -438,7 +439,7 @@ class StaticSegment {
         if (!arrayp(members)) members = ({ members });
         if (!sizeof(members)) error("Bad argument.\n");
         foreach (members; int n; mixed v) {
-            if (stringp(v)) members[n] = get_email_struct(v);
+            if (!mappingp(v)) members[n] = get_email_struct(v);
         }
 
         call("members-del", ([ "batch" : members ]), lambda(int(0..1) success, object(Error)|mapping ret) {
