@@ -1,5 +1,3 @@
-#define MAILCHIMP_DEBUG
-
 #ifdef MAILCHIMP_DEBUG
 # define mc_debug(a ...)        werror(a)
 #else
