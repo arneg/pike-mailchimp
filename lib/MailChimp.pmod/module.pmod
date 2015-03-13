@@ -4,7 +4,10 @@
 # define mc_debug(a ...)
 #endif
 
+//!
 typedef function(int(0..1),mapping|object(Error),mixed...:void) call_cb;
+
+//!
 typedef function(int(0..1),array(mapping)|object(Error),mixed...:void) export_cb;
 
 private void headers_ok() {}
@@ -42,34 +45,42 @@ constant list_errors = ([
 constant segment_errors = ([
 ]);
 
+//!
 class Error(mapping info) {
     string _sprintf(int type) {
         return sprintf("%O(%O)", this_program, info);
     }
 
+    //!
     constant is_error = 1;
 
+    //!
     int(0..1) `is_permanent() {
         return has_index(permanent_errors, info->name||info->code);
     }
 
+    //!
     int(0..1) `is_temporary() {
         return has_index(temporary_errors, info->name||info->code);
     }
 
+    //!
     int(0..1) `is_account_error() {
         return has_index(account_errors, info->name||info->code);
     }
 
+    //!
     int(0..1) `is_list_error() {
         return has_index(list_errors, info->name||info->code);
     }
 
+    //!
     int(0..1) `is_segment_error() {
         return has_index(segment_errors, info->name||info->code);
     }
 }
 
+//!
 class Timeout {
     inherit Error;
 
@@ -90,6 +101,7 @@ private mapping get_email_struct(mapping|string data) {
 }
 
 
+//!
 class Session {
     private void data_ok(object request, call_cb cb, array extra) {
         string s = request->data();
@@ -142,6 +154,7 @@ class Session {
 
     string apikey;
 
+    //!
     void create(string apikey) {
         array(string) tmp = apikey / "-";
         this_program::apikey = apikey;
@@ -154,6 +167,7 @@ class Session {
         export_url = Standards.URI("https://"+dc+".api.mailchimp.com/export/1.0/");
     }
 
+    //!
     void call(string s, mapping data, call_cb cb, mixed ... extra) {
         data += ([ "apikey" : apikey ]);
 
@@ -164,6 +178,7 @@ class Session {
                              headers_ok, data_ok, fail, cb, extra);
     }
 
+    //!
     void export(string s, mapping data, call_cb cb, mixed ... extra) {
         data += ([ "apikey" : apikey ]);
 
@@ -173,6 +188,7 @@ class Session {
                             headers_ok, export_data_ok, fail, cb, extra);
     }
 
+    //!
     void lists(void|mapping data, function(array(List),mixed...:void) cb, mixed ... extra) {
         call("lists/list", data||([]), list_cb, this, cb, extra);
     }
@@ -197,11 +213,18 @@ private void segment_cb(int(0..1) success, mixed data, object(List) list, functi
     cb(map(data, Function.curry(StaticSegment)(list)), @extra);
 }
 
+//!
 class List {
+    //!
     mapping info;
+
+    //!
     string id;
+
+    //!
     Session session;
 
+    //!
     void create(Session session, mapping info) {
         this_program::session = session;
         this_program::info = info;
@@ -209,6 +232,7 @@ class List {
         id = info->id;
     }
 
+    //!
     void call(string s, mapping data, call_cb cb, mixed ... extra) {
         session->call("lists/"+s, data + ([ "id" : id ]), cb, @extra);
     }
@@ -221,6 +245,7 @@ class List {
         }
     }
     
+    //!
     void export(mapping data, export_cb cb, mixed ... extra) {
         data += ([ "id" : id ]);
 
@@ -230,10 +255,12 @@ class List {
         session->export("list", data, export_callback, cb, extra);
     }
 
+    //!
     void static_segments(void|mapping data, function(array(StaticSegment),mixed...:void) cb, mixed ... extra) {
         call("static-segments", data||([]), segment_cb, this, cb, extra);
     }
 
+    //!
     void static_segment_add(string name, function(int(0..1),object(StaticSegment),mixed...:void) cb, mixed ... extra) {
         call("static-segment-add", ([ "name" : name ]), lambda(int(0..1) success, object(Error)|mapping data) {
              if (success) {
@@ -250,6 +277,7 @@ class List {
 
     typedef subscribe_cb|function(array(object(Subscriber))|int(0..1),object(Error)|array(object(Error)),mixed...:void) member_info_cb;
 
+    //!
     void member_info(string|mapping|array email, member_info_cb cb, mixed ... extra) {
         mapping data = ([]);
         int array_return = 0;
@@ -284,8 +312,10 @@ class List {
         });
     }
 
+    //!
     typedef function(int(0..1),object(Subscriber)|object(Error),mixed...:void) subscribe_cb;
 
+    //!
     void subscribe(string|mapping email, subscribe_cb cb,
                    mixed ... extra) {
         mapping data = ([
@@ -305,8 +335,10 @@ class List {
         });
     }
 
+    //!
     typedef function(int(0..1),object(Error),mixed...:void) unsubscribe_cb;
 
+    //!
     void unsubscribe(string|mapping email, unsubscribe_cb cb, mixed ... extra) {
         mapping data = ([
             "send_goodye" : Val.false,
@@ -322,9 +354,11 @@ class List {
         });
     }
 
+    //!
     typedef function(array(object(Subscriber))|int(0..1),
                      array(object(Error))|object(Error),mixed...:void) batch_subscribe_cb;
 
+    //!
     void batch_subscribe(mapping data, array(mapping|string) batch, batch_subscribe_cb cb, mixed ... extra) {
         data = ([ "double_optin" : Val.false, ]) + data;
 
@@ -351,8 +385,10 @@ class List {
         });
     }
 
+    //!
     typedef function(int(0..1),array(object(Error))|object(Error),mixed...:void) batch_unsubscribe_cb;
 
+    //!
     void batch_unsubscribe(mapping data, array(mapping|string) batch, batch_unsubscribe_cb cb,
                            mixed ... extra) {
         if (!sizeof(batch)) error("Bad argument.\n");
@@ -378,21 +414,33 @@ class List {
     }
 }
 
+//!
 class Subscriber {
+    //!
     List list;
+
+    //!
     mapping info;
 
+    //!
     void create(List list, mapping info) {
         this_program::list = list;
         this_program::info = info;
     }
 }
 
+//!
 class StaticSegment {
+    //!
     int id;
+
+    //!
     mapping info;
+
+    //!
     List list;
 
+    //!
     void create(List list, mapping info) {
         this_program::list = list;
         this_program::info = info;
@@ -400,6 +448,7 @@ class StaticSegment {
         id = info->id;
     }
 
+    //!
     void call(string s, mapping data, call_cb cb, mixed ... extra) {
         list->call("static-segment-"+s, data + ([ "seg_id" : id ]), cb, @extra);
     }
@@ -408,12 +457,15 @@ class StaticSegment {
         return sprintf("%O(%O)", this_program, id);
     }
 
+    //!
     void delete(call_cb cb, mixed ... extra) {
         call("del", ([]), cb, @extra);
     }
 
+    //!
     typedef function(int(0..1),array(Error)|object(Error),mixed...:void) add_members_cb;
 
+    //!
     void add_members(mixed|array members, add_members_cb cb, mixed ... extra) {
         if (!arrayp(members)) members = ({ members });
         if (!sizeof(members)) error("Bad argument.\n");
@@ -431,8 +483,10 @@ class StaticSegment {
         });
     }
 
+    //!
     typedef function(int(0..1),array(Error)|object(Error),mixed...:void) delete_members_cb;
 
+    //!
     void delete_members(mixed|array members, delete_members_cb cb, mixed ... extra) {
         if (!arrayp(members)) members = ({ members });
         if (!sizeof(members)) error("Bad argument.\n");
@@ -450,6 +504,7 @@ class StaticSegment {
         });
     }
 
+    //!
     void reset(call_cb cb, mixed ... extra) {
         call("reset", ([ ]), cb, @extra);
     }
