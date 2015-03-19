@@ -5,6 +5,47 @@
 #endif
 
 //!
+constant batch_limit = 4000;
+
+protected class EventAggregator(function cb, mixed ... extra) {
+    protected private int cbs = 0;
+    protected int called = 0;
+
+    protected array results = ({ });
+
+    protected void foo(int n, mixed ... args) {
+        results[n] = args;
+        called ++;
+
+        if (called != cbs) return;
+
+        args = results;
+        results = 0;
+
+        function callback = cb;
+        cb = 0;
+
+        callback(@extra, @args);
+    }
+
+    function get_cb() {
+        results += ({ 0 }); 
+
+        return Function.curry(foo)(cbs++);
+    }
+
+    string _sprintf(int t) {
+        return sprintf("%O(%O)", this_program, cb);
+    }
+
+    void destroy() {
+        if (results && cbs) {
+            call_out(cb, 0, @extra, @results);
+        }
+    }
+}
+
+//!
 typedef function(int(0..1),mapping|object(Error),mixed...:void) call_cb;
 
 //!
@@ -358,6 +399,24 @@ class List {
     typedef function(array(object(Subscriber))|int(0..1),
                      array(object(Error))|object(Error),mixed...:void) batch_subscribe_cb;
 
+    protected void batch_subscribe_aggregate(batch_subscribe_cb cb, array extra, array ... ret) {
+        array(object) subs = ({}), errors = ({ });
+
+        foreach (ret;; array a) {
+            [int(0..1) success, mapping data] = a;
+
+            if (!success || !mappingp(data) || (!data->add_count && !data->update_count && !data->error_count)) {
+                cb(0, make_error(data), @extra);
+                return;
+            } else {
+                subs += map(data->adds + data->updates, Function.curry(Subscriber)(this));
+                errors += map(data->errors, Error);
+            }
+        }
+
+        cb(subs, errors, @extra);
+    }
+
     //!
     void batch_subscribe(mapping data, array(mapping|string) batch, batch_subscribe_cb cb, mixed ... extra) {
         data = ([ "double_optin" : Val.false, ]) + data;
@@ -370,23 +429,32 @@ class List {
             if (!mappingp(info)) batch[i] = ([ "email" : get_email_struct(info) ]);
         }
 
-        data->batch = batch;
+        object aggregator = EventAggregator(batch_subscribe_aggregate, cb, extra);
 
-        call("batch-subscribe", data, lambda(int(0..1) success, mapping data) {
-            if (!success || !mappingp(data) || (!data->add_count && !data->update_count && !data->error_count)) {
-                cb(0, make_error(data), @extra);
-                return;
-            } else {
-                array(object) subs = map(data->adds + data->updates, Function.curry(Subscriber)(this));
-                array(object) errors = map(data->errors, Error);
-
-                cb(subs, errors, @extra);
-            }
-        });
+        foreach (batch/(float)batch_limit;; array b) {
+            call("batch-subscribe", data + ([ "batch" : b ]), aggregator->get_cb());
+        }
     }
 
     //!
     typedef function(int(0..1),array(object(Error))|object(Error),mixed...:void) batch_unsubscribe_cb;
+
+    protected void batch_unsubscribe_aggregate(batch_unsubscribe_cb cb, array extra, array ... ret) {
+        array(object) errors = ({});
+
+        foreach (ret;; array a) {
+            [int(0..1) success, mapping data] = a;
+
+            if (!success || !mappingp(data) || (!data->success_count && !data->error_count)) {
+                cb(0, make_error(data), @extra);
+                return;
+            } else {
+                errors += map(data->errors, Error);
+            }
+        }
+
+        cb(1, errors, @extra);
+    }
 
     //!
     void batch_unsubscribe(mapping data, array(mapping|string) batch, batch_unsubscribe_cb cb,
@@ -399,18 +467,11 @@ class List {
             if (!mappingp(info)) batch[i] = ([ "email" : get_email_struct(info) ]);
         }
 
-        data->batch = batch;
+        object aggregator = EventAggregator(batch_subscribe_aggregate, cb, extra);
 
-        call("batch-unsubscribe", data, lambda(int(0..1) success, mapping data) {
-            if (!success || !mappingp(data) || (!data->success_count && !data->error_count)) {
-                cb(0, make_error(data), @extra);
-                return;
-            } else {
-                array(object) errors = map(data->errors, Error);
-
-                cb(1, errors, @extra);
-            }
-        });
+        foreach (batch/(float)batch_limit;; array b) {
+            call("batch-unsubscribe", data + ([ "batch" : b ]), aggregator->get_cb());
+        }
     }
 }
 
@@ -465,26 +526,55 @@ class StaticSegment {
     //!
     typedef function(int(0..1),array(Error)|object(Error),mixed...:void) add_members_cb;
 
-    //!
-    void add_members(mixed|array members, add_members_cb cb, mixed ... extra) {
-        if (!arrayp(members)) members = ({ members });
-        if (!sizeof(members)) error("Bad argument.\n");
-        foreach (members; int n; mixed v) {
-            if (!mappingp(v)) members[n] = get_email_struct(v);
-        }
+    protected void add_members_aggregate(add_members_cb cb, array extra, array ... ret) {
+        array(object) errors = ({ });
 
-        call("members-add", ([ "batch" : members ]), lambda(int(0..1) success, mapping|object(Error) ret) {
+        foreach (ret;; array a) {
+            [int(0..1) success, mapping|object(Error) ret] = a;
             if (!success || (!ret->success_count && !ret->error_count)) {
                 cb(0, ret, @extra);
                 return;
             }
 
-            cb(1, map(ret->errors, make_error), @extra);
-        });
+            errors += map(ret->errors, make_error);
+        }
+
+        cb(1, errors, @extra);
+    }
+
+    //!
+    void add_members(mixed|array members, add_members_cb cb, mixed ... extra) {
+        if (!arrayp(members)) members = ({ members });
+        if (!sizeof(members)) error("Bad argument.\n");
+
+        foreach (members; int n; mixed v) {
+            if (!mappingp(v)) members[n] = get_email_struct(v);
+        }
+
+        object aggregator = EventAggregator(add_members_aggregate, cb, extra);
+
+        foreach (members/(float)batch_limit;; array m)
+            call("members-add", ([ "batch" : m ]), aggregator->get_cb());
     }
 
     //!
     typedef function(int(0..1),array(Error)|object(Error),mixed...:void) delete_members_cb;
+
+    void delete_members_aggregate(delete_members_cb cb, array extra, mixed ... ret) {
+        array(object) errors = ({ });
+
+        foreach (ret;; array a) {
+            [int(0..1) success, mapping|object(Error) ret] = a;
+            if (!success || (!ret->success_count && !ret->error_count)) {
+                cb(0, ret, @extra);
+                return;
+            }
+
+            errors += map(ret->errors, make_error);
+        }
+
+        cb(1, errors, @extra);
+    }
 
     //!
     void delete_members(mixed|array members, delete_members_cb cb, mixed ... extra) {
@@ -494,14 +584,10 @@ class StaticSegment {
             if (!mappingp(v)) members[n] = get_email_struct(v);
         }
 
-        call("members-del", ([ "batch" : members ]), lambda(int(0..1) success, object(Error)|mapping ret) {
-            if (!success || (!ret->success_count && !ret->error_count)) {
-                cb(0, ret, @extra);
-                return;
-            }
+        object aggregator = EventAggregator(delete_members_aggregate, cb, extra);
 
-            cb(1, map(ret->errors, make_error), @extra);
-        });
+        foreach (members/(float)batch_limit;; array m)
+            call("members-del", ([ "batch" : members ]), aggregator->get_cb());
     }
 
     //!
