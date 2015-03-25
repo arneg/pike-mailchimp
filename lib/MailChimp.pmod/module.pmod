@@ -412,6 +412,7 @@ class List {
                      array(object(Error))|object(Error),mixed...:void) batch_subscribe_cb;
 
     protected void batch_subscribe_aggregate(batch_subscribe_cb cb, array extra, array ... ret) {
+        function(mapping:object) my_subscriber = Function.curry(Subscriber)(this);
         array(object) subs = ({}), errors = ({ });
 
         foreach (ret;; array a) {
@@ -421,8 +422,12 @@ class List {
                 cb(0, make_error(data), @extra);
                 return;
             } else {
-                subs += map(data->adds + data->updates, Function.curry(Subscriber)(this));
-                errors += map(data->errors, Error);
+                array tmp = data->adds;
+                if (arrayp(tmp)) subs += map(tmp, my_subscriber);
+                tmp = data->updates;
+                if (arrayp(tmp)) subs += map(tmp, my_subscriber);
+                tmp = data->errors;
+                if (arrayp(tmp)) errors += map(data->errors, Error);
             }
         }
 
@@ -461,7 +466,8 @@ class List {
                 cb(0, make_error(data), @extra);
                 return;
             } else {
-                errors += map(data->errors, Error);
+                array tmp = data->errors;
+                if (arrayp(tmp)) errors += map(tmp, Error);
             }
         }
 
@@ -479,7 +485,7 @@ class List {
             if (!mappingp(info)) batch[i] = ([ "email" : get_email_struct(info) ]);
         }
 
-        object aggregator = EventAggregator(batch_subscribe_aggregate, cb, extra);
+        object aggregator = EventAggregator(batch_unsubscribe_aggregate, cb, extra);
 
         foreach (batch/(float)batch_limit;; array b) {
             call("batch-unsubscribe", data + ([ "batch" : b ]), aggregator->get_cb());
@@ -547,8 +553,9 @@ class StaticSegment {
                 cb(0, ret, @extra);
                 return;
             }
+            array tmp = ret->errors;
 
-            errors += map(ret->errors, make_error);
+            if (arrayp(tmp)) errors += map(tmp, make_error);
         }
 
         cb(1, errors, @extra);
@@ -581,8 +588,9 @@ class StaticSegment {
                 cb(0, ret, @extra);
                 return;
             }
+            array tmp = ret->errors;
 
-            errors += map(ret->errors, make_error);
+            if (arrayp(tmp)) errors += map(tmp, make_error);
         }
 
         cb(1, errors, @extra);
