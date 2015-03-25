@@ -156,12 +156,18 @@ class Session {
             return;
         }
 
-        if (mappingp(ret) && ret->status == "error") {
-            cb(0, Error(ret), @extra);
-            return;
-        }
+        mixed err = catch {
+            if (mappingp(ret) && ret->status == "error") {
+                cb(0, Error(ret), @extra);
+                return;
+            }
 
-        cb(1, ret, @extra);
+            cb(1, ret, @extra);
+        };
+        if (err) {
+            werror("callback %O threw an error in response to %O\n", cb, ret);
+            master()->handle_error(err);
+        }
     }
 
     private void export_data_ok(object request, export_cb cb, array extra) {
@@ -178,12 +184,18 @@ class Session {
             }
         };
 
-        if (err) {
-            cb(0, Error(([ "name" : "invalid_json", "error" : describe_error(err) ])), @extra);
-            return;
-        }
+        err = catch {
+            if (err) {
+                cb(0, Error(([ "name" : "invalid_json", "error" : describe_error(err) ])), @extra);
+                return;
+            }
 
-        cb(1, ret, @extra);
+            cb(1, ret, @extra);
+        };
+        if (err) {
+            werror("callback %O threw an error in response to %O\n", cb, ret);
+            master()->handle_error(err);
+        }
     }
 
     private void fail(object request, export_cb|call_cb cb, array extra) {
